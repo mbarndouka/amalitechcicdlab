@@ -1,0 +1,20 @@
+language: minimal
+
+services:
+  - docker
+
+env:
+  global:
+    - AIRFLOW_IMAGE_NAME="amalitech-airflow:3.2.1"
+    - AIRFLOW_BASE_IMAGE="apache/airflow:3.2.1"
+
+before_install:
+  # Copy example environment variables so that docker-compose doesn't complain about missing variables
+  - if [ -f .env.example ]; then cp .env.example .env; fi
+
+script:
+  # Build the custom Airflow Docker image to ensure the Dockerfile and dependencies are valid
+  - docker build --build-arg AIRFLOW_BASE_IMAGE=$AIRFLOW_BASE_IMAGE -t $AIRFLOW_IMAGE_NAME .
+
+  # Also test that docker-compose can parse the config and build the project
+  - docker-compose build

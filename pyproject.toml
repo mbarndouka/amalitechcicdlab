@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "amalitech-airflow-project"
+version = "0.1.0"
+description = "Amalitech CI/CD Lab Airflow Environment"
+requires-python = ">=3.8"
+
+# Based on your docker-compose.yaml, these are the essential Airflow provider packages
+dependencies = [
+    "apache-airflow-providers-celery",
+    "apache-airflow-providers-fab",
+    "apache-airflow-providers-postgres",
+    "apache-airflow-providers-mysql",
+    "apache-airflow-providers-redis",
+]

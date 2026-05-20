@@ -1,0 +1,23 @@
+# Environments
+.env
+.venv
+env/
+venv/
+
+# IDE / Editor
+.vscode/
+.idea/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
+
+# Python
+__pycache__/
+*.pyc
+
+# Docker
+.docker/
