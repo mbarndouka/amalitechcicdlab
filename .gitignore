@@ -1,23 +1,47 @@
-# Environments
+# Secrets
 .env
+
+# Python
 .venv
 env/
 venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
 
 # IDE / Editor
 .vscode/
 .idea/
+*.swp
+*.swo
 
-# OS generated files
+# OS
 .DS_Store
 Thumbs.db
 
 # Node
 node_modules/
 
-# Python
-__pycache__/
-*.pyc
-
 # Docker
 .docker/
+
+# Airflow runtime (generated, not source)
+logs/
+config/airflow.cfg
+
+# Airflow DAG artifacts
+dags/__pycache__/
+dags/**/__pycache__/
+
+# dbt
+dbt/target/
+dbt/logs/
+dbt/.user.yml
+
+# MinIO / object storage local data
+minio_data/

@@ -8,10 +8,17 @@ version = "0.1.0"
 description = "Amalitech CI/CD Lab Airflow Environment"
 requires-python = ">=3.8"
 
-# Based on your docker-compose.yaml, these are the essential Airflow provider packages
 dependencies = [
     "apache-airflow-providers-celery",
     "apache-airflow-providers-fab",
     "apache-airflow-providers-postgres",
+    "apache-airflow-providers-amazon",
     "apache-airflow-providers-redis",
+    "apache-airflow-providers-smtp",
+    "apache-airflow-providers-sendgrid",
+    "pandas>=2.0.0",
+    "faker>=19.0.0",
 ]
+
+[tool.setuptools]
+packages = []

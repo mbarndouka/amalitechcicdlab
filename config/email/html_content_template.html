@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<body style="font-family: Arial, sans-serif; color: #333;">
+
+  <h2 style="color: #c0392b;">Pipeline Failure Alert</h2>
+
+  <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse;">
+    <tr><td><b>DAG</b></td><td>{{ dag.dag_id }}</td></tr>
+    <tr><td><b>Task</b></td><td>{{ ti.task_id }}</td></tr>
+    <tr><td><b>Run ID</b></td><td>{{ run_id }}</td></tr>
+    <tr><td><b>Attempt</b></td><td>{{ try_number }} of {{ max_tries + 1 }}</td></tr>
+    <tr><td><b>Host</b></td><td>{{ ti.hostname }}</td></tr>
+    <tr><td><b>Exception</b></td><td>{{ exception_html }}</td></tr>
+  </table>
+
+  <p style="margin-top: 16px;">
+    <a href="{{ ti.log_url }}" style="margin-right: 16px;">View Logs</a>
+    <a href="{{ ti.mark_success_url }}">Mark Success</a>
+  </p>
+
+</body>
+</html>

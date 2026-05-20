@@ -1,0 +1,12 @@
+[minio]
+endpoint_url      = "http://minio:9000"
+bucket_raw        = "raw-sales"
+bucket_processed  = "processed-sales"
+
+[generator]
+default_rows    = 1000
+lookback_days   = 30
+max_customer_id = 500
+max_qty         = 10
+products        = ["Laptop", "Monitor", "Keyboard", "Mouse", "Headset", "Webcam", "Desk", "Chair"]
+regions         = ["EU", "US", "AF", "AS", "LATAM"]
