@@ -73,8 +73,28 @@ _success_notifier = SmtpNotifier(
 def sales_pipeline():
 
     @task
-    def generate_data() -> str:
+    def check_tables() -> None:
+        required = ["dim_date", "dim_customer", "dim_product", "dim_geography",
+                    "dim_channel", "dim_payment", "fact_sales"]
+        pg_hook = PostgresHook(postgres_conn_id=POSTGRES_CONN_ID)
+        conn    = pg_hook.get_conn()
+        cursor  = conn.cursor()
+        cursor.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_schema = 'public'
+              AND table_name = ANY(%s)
+        """, (required,))
+        found   = {row[0] for row in cursor.fetchall()}
+        missing = set(required) - found
+        cursor.close()
+        if missing:
+            raise RuntimeError(
+                f"Missing tables in target DB: {sorted(missing)}. "
+                "Run init-db/02-create-sales-table.sql first."
+            )
 
+    @task
+    def generate_data() -> str:
         creds = S3Hook(aws_conn_id=MINIO_CONN_ID).get_credentials()
         key   = upload_to_minio(
             generate_sales(),
@@ -82,25 +102,6 @@ def sales_pipeline():
             secret_key=creds.secret_key,
         )
         return key
-
-    @task
-    def check_table() -> None:
-        pg_hook = PostgresHook(postgres_conn_id=POSTGRES_CONN_ID)
-        conn   = pg_hook.get_conn()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT EXISTS (
-                SELECT 1 FROM information_schema.tables
-                WHERE table_schema = 'public' AND table_name = 'sales'
-            )
-        """)
-        exists = cursor.fetchone()[0]
-        cursor.close()
-        if not exists:
-            raise RuntimeError(
-                "Table 'sales' not found in target DB. "
-                "Run init-db/02-create-sales-table.sql before ingesting."
-            )
 
     @task
     def list_new_files(uploaded_key: str) -> list[str]:
@@ -120,37 +121,144 @@ def sales_pipeline():
 
         # ── Transform ────────────────────────────────────────────────────────
         df = df.dropna(subset=["order_id", "order_ts", "customer_id",
-                                "product", "region", "qty", "unit_price"])
+                                "product_name", "country_code", "qty", "unit_price"])
         df = df.drop_duplicates(subset=["order_id"])
         df["order_ts"]    = pd.to_datetime(df["order_ts"], utc=True)
         df["qty"]         = df["qty"].astype(int)
         df["unit_price"]  = df["unit_price"].astype(float).round(2)
-        df["total"]       = (df["qty"] * df["unit_price"]).round(2)
+        df["cost_price"]  = df["cost_price"].astype(float).round(2)
+        df["discount_pct"]= df["discount_pct"].fillna(0).astype(float).round(2)
+        df["total"]       = df["total"].astype(float).round(2)
+        df["gross_margin"]= df["gross_margin"].astype(float).round(2)
+        df["is_returned"] = df["is_returned"].fillna(False).astype(bool)
         df["source_file"] = key
         df = df[(df["qty"] > 0) & (df["unit_price"] > 0)]
 
-        # ── Load ─────────────────────────────────────────────────────────────
-        cols = ["order_id", "order_ts", "customer_id", "product",
-                "region", "qty", "unit_price", "total", "source_file"]
-        rows = df[cols].values.tolist()
-
         conn   = pg_hook.get_conn()
         cursor = conn.cursor()
-        execute_values(
-            cursor,
-            """
-            INSERT INTO sales
-                (order_id, order_ts, customer_id, product,
-                 region, qty, unit_price, total, source_file)
+
+        # ── Upsert dim_date ───────────────────────────────────────────────────
+        dates = df["order_ts"].dt.date.unique()
+        date_rows = []
+        for d in dates:
+            dt = datetime(d.year, d.month, d.day)
+            date_rows.append((
+                int(d.strftime("%Y%m%d")),
+                d,
+                d.year,
+                (d.month - 1) // 3 + 1,
+                d.month,
+                dt.strftime("%B"),
+                int(d.strftime("%W")),
+                d.weekday(),
+                dt.strftime("%A"),
+                d.weekday() >= 5,
+                d.weekday() < 5,
+            ))
+        execute_values(cursor, """
+            INSERT INTO dim_date
+                (date_id, full_date, year, quarter, month_num, month_name,
+                 week_of_year, day_of_week, day_name, is_weekend, is_business_day)
+            VALUES %s ON CONFLICT (date_id) DO NOTHING
+        """, date_rows)
+
+        # ── Upsert dim_customer ───────────────────────────────────────────────
+        cust_cols = ["customer_id", "customer_full_name", "customer_email",
+                     "customer_signup_date", "customer_tier"]
+        cust_rows = df[cust_cols].drop_duplicates("customer_id").values.tolist()
+        execute_values(cursor, """
+            INSERT INTO dim_customer (customer_id, full_name, email, signup_date, tier)
+            VALUES %s
+            ON CONFLICT (customer_id) DO UPDATE
+                SET tier = EXCLUDED.tier, updated_at = NOW()
+        """, cust_rows)
+
+        # ── Upsert dim_product ────────────────────────────────────────────────
+        prod_cols = ["product_name", "product_category", "product_brand",
+                     "product_sku", "product_cost_price", "product_list_price"]
+        prod_rows = df[prod_cols].drop_duplicates("product_name").values.tolist()
+        execute_values(cursor, """
+            INSERT INTO dim_product
+                (name, category, brand, sku, cost_price, list_price)
+            VALUES %s
+            ON CONFLICT (name) DO UPDATE
+                SET cost_price = EXCLUDED.cost_price,
+                    list_price = EXCLUDED.list_price,
+                    updated_at = NOW()
+        """, prod_rows)
+
+        # ── Upsert dim_geography ──────────────────────────────────────────────
+        geo_cols  = ["country", "country_code", "region", "sub_region", "latitude", "longitude"]
+        geo_rows  = df[geo_cols].drop_duplicates("country_code").values.tolist()
+        execute_values(cursor, """
+            INSERT INTO dim_geography (country, country_code, region, sub_region, latitude, longitude)
+            VALUES %s ON CONFLICT (country_code) DO NOTHING
+        """, geo_rows)
+
+        # ── Upsert dim_channel ────────────────────────────────────────────────
+        ch_cols  = ["channel", "channel_type"]
+        ch_rows  = df[ch_cols].drop_duplicates("channel").values.tolist()
+        execute_values(cursor, """
+            INSERT INTO dim_channel (channel, channel_type)
+            VALUES %s ON CONFLICT (channel) DO NOTHING
+        """, ch_rows)
+
+        # ── Upsert dim_payment ────────────────────────────────────────────────
+        pay_cols = ["payment_method", "payment_is_digital"]
+        pay_rows = df[pay_cols].drop_duplicates("payment_method").values.tolist()
+        execute_values(cursor, """
+            INSERT INTO dim_payment (method, is_digital)
+            VALUES %s ON CONFLICT (method) DO NOTHING
+        """, pay_rows)
+
+        conn.commit()
+
+        # ── Resolve FK IDs ────────────────────────────────────────────────────
+        cursor.execute("SELECT date_id, full_date FROM dim_date")
+        date_map = {str(r[1]): r[0] for r in cursor.fetchall()}
+
+        cursor.execute("SELECT customer_id FROM dim_customer")
+        # customer_id is the natural PK — no mapping needed
+
+        cursor.execute("SELECT product_id, name FROM dim_product")
+        prod_map = {r[1]: r[0] for r in cursor.fetchall()}
+
+        cursor.execute("SELECT geo_id, country_code FROM dim_geography")
+        geo_map = {r[1]: r[0] for r in cursor.fetchall()}
+
+        cursor.execute("SELECT channel_id, channel FROM dim_channel")
+        ch_map = {r[1]: r[0] for r in cursor.fetchall()}
+
+        cursor.execute("SELECT payment_id, method FROM dim_payment")
+        pay_map = {r[1]: r[0] for r in cursor.fetchall()}
+
+        # ── Build fact rows ───────────────────────────────────────────────────
+        df["date_key"] = df["order_ts"].dt.date.astype(str).map(date_map)
+        df["prod_fk"]  = df["product_name"].map(prod_map)
+        df["geo_fk"]   = df["country_code"].map(geo_map)
+        df["ch_fk"]    = df["channel"].map(ch_map)
+        df["pay_fk"]   = df["payment_method"].map(pay_map)
+
+        fact_cols = ["order_id", "order_ts", "date_key", "customer_id",
+                     "prod_fk", "geo_fk", "ch_fk", "pay_fk",
+                     "qty", "unit_price", "cost_price", "discount_pct",
+                     "total", "gross_margin", "is_returned", "source_file"]
+        rows = df[fact_cols].values.tolist()
+
+        # ── Load fact_sales ───────────────────────────────────────────────────
+        execute_values(cursor, """
+            INSERT INTO fact_sales
+                (order_id, order_ts, date_id, customer_id,
+                 product_id, geo_id, channel_id, payment_id,
+                 qty, unit_price, cost_price, discount_pct,
+                 total, gross_margin, is_returned, source_file)
             VALUES %s
             ON CONFLICT (order_id) DO NOTHING
-            """,
-            rows,
-        )
+        """, rows)
         conn.commit()
         cursor.close()
 
-        # ── Archive ──────────────────────────────────────────────────────────
+        # ── Archive ───────────────────────────────────────────────────────────
         s3_hook.copy_object(
             source_bucket_key=key,
             dest_bucket_key=key,
@@ -162,10 +270,10 @@ def sales_pipeline():
             keys=[key],
         )
 
-    uploaded_key   = generate_data()
-    table_ok       = check_table()
-    keys           = list_new_files(uploaded_key)
-    keys.set_upstream(table_ok)
+    table_ok     = check_tables()
+    uploaded_key = generate_data()
+    uploaded_key.set_upstream(table_ok)
+    keys         = list_new_files(uploaded_key)
     process_file.expand(key=keys)
 
 

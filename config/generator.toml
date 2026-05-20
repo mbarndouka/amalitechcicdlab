@@ -7,6 +7,193 @@ bucket_processed  = "processed-sales"
 default_rows    = 1000
 lookback_days   = 30
 max_customer_id = 500
-max_qty         = 10
-products        = ["Laptop", "Monitor", "Keyboard", "Mouse", "Headset", "Webcam", "Desk", "Chair"]
-regions         = ["EU", "US", "AF", "AS", "LATAM"]
+max_qty         = 20
+
+[generator.category_margins]
+Electronics  = 0.72
+Furniture    = 0.55
+Software     = 0.18
+Accessories  = 0.60
+
+[generator.pricing]
+Electronics  = [15.0,  1800.0]
+Furniture    = [40.0,   900.0]
+Software     = [9.99,   299.0]
+Accessories  = [5.0,    120.0]
+
+[generator.channels]
+weights = { online = 55, retail = 30, partner = 15 }
+
+[generator.payment_methods]
+weights = { card = 50, invoice = 25, wallet = 15, crypto = 10 }
+
+[generator.customer_tiers]
+platinum = 20
+gold     = 80
+silver   = 200
+
+[generator.products]
+Electronics  = ["Laptop", "Monitor", "Keyboard", "Mouse", "Headset", "Webcam",
+                "Tablet", "Smartphone", "Smartwatch", "Printer", "SSD", "RAM",
+                "Graphics Card", "Microphone", "LED Strip"]
+Furniture    = ["Desk", "Chair", "Bookshelf", "Filing Cabinet", "Standing Desk",
+                "Monitor Arm", "Footrest", "Whiteboard"]
+Software     = ["Antivirus", "Office Suite", "Design Tool", "Cloud Storage",
+                "VPN License", "Password Manager", "Video Editor"]
+Accessories  = ["USB Hub", "Charging Cable", "Laptop Bag", "Power Bank",
+                "Screen Protector", "Docking Station", "Surge Protector",
+                "Webcam Cover", "Cable Organiser"]
+
+[[generator.countries]]
+name       = "United States"
+code       = "US"
+region     = "Americas"
+sub_region = "Northern America"
+weight     = 20
+
+[[generator.countries]]
+name       = "Canada"
+code       = "CA"
+region     = "Americas"
+sub_region = "Northern America"
+weight     = 7
+
+[[generator.countries]]
+name       = "Brazil"
+code       = "BR"
+region     = "Americas"
+sub_region = "South America"
+weight     = 6
+
+[[generator.countries]]
+name       = "Mexico"
+code       = "MX"
+region     = "Americas"
+sub_region = "Central America"
+weight     = 4
+
+[[generator.countries]]
+name       = "Germany"
+code       = "DE"
+region     = "Europe"
+sub_region = "Western Europe"
+weight     = 12
+
+[[generator.countries]]
+name       = "United Kingdom"
+code       = "GB"
+region     = "Europe"
+sub_region = "Northern Europe"
+weight     = 11
+
+[[generator.countries]]
+name       = "France"
+code       = "FR"
+region     = "Europe"
+sub_region = "Western Europe"
+weight     = 9
+
+[[generator.countries]]
+name       = "Netherlands"
+code       = "NL"
+region     = "Europe"
+sub_region = "Western Europe"
+weight     = 7
+
+[[generator.countries]]
+name       = "Spain"
+code       = "ES"
+region     = "Europe"
+sub_region = "Southern Europe"
+weight     = 5
+
+[[generator.countries]]
+name       = "India"
+code       = "IN"
+region     = "Asia"
+sub_region = "Southern Asia"
+weight     = 8
+
+[[generator.countries]]
+name       = "Singapore"
+code       = "SG"
+region     = "Asia"
+sub_region = "South-Eastern Asia"
+weight     = 5
+
+[[generator.countries]]
+name       = "UAE"
+code       = "AE"
+region     = "Asia"
+sub_region = "Western Asia"
+weight     = 5
+
+[[generator.countries]]
+name       = "Japan"
+code       = "JP"
+region     = "Asia"
+sub_region = "Eastern Asia"
+weight     = 4
+
+[[generator.countries]]
+name       = "Nigeria"
+code       = "NG"
+region     = "Africa"
+sub_region = "Western Africa"
+weight     = 6
+
+[[generator.countries]]
+name       = "Ghana"
+code       = "GH"
+region     = "Africa"
+sub_region = "Western Africa"
+weight     = 4
+
+[[generator.countries]]
+name       = "Kenya"
+code       = "KE"
+region     = "Africa"
+sub_region = "Eastern Africa"
+weight     = 4
+
+[[generator.countries]]
+name       = "South Africa"
+code       = "ZA"
+region     = "Africa"
+sub_region = "Southern Africa"
+weight     = 5
+
+[[generator.countries]]
+name       = "Egypt"
+code       = "EG"
+region     = "Africa"
+sub_region = "Northern Africa"
+weight     = 4
+
+[[generator.countries]]
+name       = "Rwanda"
+code       = "RW"
+region     = "Africa"
+sub_region = "Eastern Africa"
+weight     = 2
+
+[[generator.countries]]
+name       = "Senegal"
+code       = "SN"
+region     = "Africa"
+sub_region = "Western Africa"
+weight     = 2
+
+[[generator.countries]]
+name       = "Tanzania"
+code       = "TZ"
+region     = "Africa"
+sub_region = "Eastern Africa"
+weight     = 2
+
+[[generator.countries]]
+name       = "Australia"
+code       = "AU"
+region     = "Oceania"
+sub_region = "Australia and NZ"
+weight     = 4
