@@ -13,6 +13,5 @@ dependencies = [
     "apache-airflow-providers-celery",
     "apache-airflow-providers-fab",
     "apache-airflow-providers-postgres",
-    "apache-airflow-providers-mysql",
     "apache-airflow-providers-redis",
 ]

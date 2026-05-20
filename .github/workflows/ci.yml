@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  AIRFLOW_IMAGE_NAME: amalitech-airflow:3.2.1
+  AIRFLOW_BASE_IMAGE: apache/airflow:3.2.1
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Seed .env from example
+        run: |
+          if [ -f .env.example ]; then
+            cp .env.example .env
+          fi
+
+      - name: Build Airflow image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          build-args: |
+            AIRFLOW_BASE_IMAGE=${{ env.AIRFLOW_BASE_IMAGE }}
+          tags: ${{ env.AIRFLOW_IMAGE_NAME }}
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Validate docker-compose config
+        run: docker compose config --quiet
+
+      - name: Build all compose services
+        run: docker compose build
