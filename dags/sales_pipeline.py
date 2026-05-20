@@ -59,7 +59,7 @@ _success_notifier = SmtpNotifier(
 
 @dag(
     dag_id="sales_pipeline",
-    schedule="*/5 * * * *",
+    schedule="0 */12 * * *",
     start_date=datetime(2024, 1, 1),
     catchup=False,
     max_active_runs=1,

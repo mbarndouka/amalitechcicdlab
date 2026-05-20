@@ -1,0 +1,422 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# NOTE: secrets are NOT available for pull_request events from forks.
+# CI will fail on fork PRs. Use pull_request_target or repo branch PRs instead.
+
+env:
+  AIRFLOW_IMAGE_NAME: amalitech-airflow:3.2.1
+  AIRFLOW_BASE_IMAGE: apache/airflow:3.2.1
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Reusable .env builder — referenced as a step in every job.
+# Uses env: block so secret values are masked in logs before the shell sees them.
+# printf '%s\n' guards against special characters in secret values.
+# ──────────────────────────────────────────────────────────────────────────────
+# Required GitHub Secrets (set in repo → Settings → Secrets → Actions):
+#   AIRFLOW_FERNET_KEY      – cryptography.fernet.Fernet.generate_key()
+#   AIRFLOW_JWT_SECRET      – secrets.token_urlsafe(32)
+#   AIRFLOW_ADMIN_PASSWORD  – Airflow web UI admin password
+#   POSTGRES_PASSWORD       – PostgreSQL password
+#   MINIO_PASSWORD          – MinIO root password
+#   SMTP_USER               – SMTP username / Gmail address
+#   SMTP_PASSWORD           – SMTP app password
+#   ALERT_EMAIL             – recipient for DAG alerts
+
+# ──────────────────────────────────────────────────────────────────────────────
+# JOB 1 – Continuous Integration: build + lint every commit
+# ──────────────────────────────────────────────────────────────────────────────
+jobs:
+  ci:
+    name: CI – Build & Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Create .env from secrets
+        env:
+          FERNET_KEY:     ${{ secrets.AIRFLOW_FERNET_KEY }}
+          JWT_SECRET:     ${{ secrets.AIRFLOW_JWT_SECRET }}
+          ADMIN_PASSWORD: ${{ secrets.AIRFLOW_ADMIN_PASSWORD }}
+          PG_PASSWORD:    ${{ secrets.POSTGRES_PASSWORD }}
+          MINIO_PASSWORD: ${{ secrets.MINIO_PASSWORD }}
+          SMTP_USER:      ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD:  ${{ secrets.SMTP_PASSWORD }}
+          ALERT_EMAIL:    ${{ secrets.ALERT_EMAIL }}
+        run: |
+          {
+            echo "AIRFLOW_UID=1000"
+            echo "AIRFLOW_BASE_IMAGE=apache/airflow:3.2.1"
+            echo "AIRFLOW_IMAGE_NAME=amalitech-airflow:3.2.1"
+            echo "AIRFLOW_PROJ_DIR=."
+            printf 'AIRFLOW__CORE__FERNET_KEY=%s\n'       "$FERNET_KEY"
+            printf 'AIRFLOW__API_AUTH__JWT_SECRET=%s\n'   "$JWT_SECRET"
+            echo "AIRFLOW__API_AUTH__JWT_ISSUER=airflow"
+            echo "_AIRFLOW_WWW_USER_USERNAME=airflow"
+            printf '_AIRFLOW_WWW_USER_PASSWORD=%s\n'      "$ADMIN_PASSWORD"
+            echo "POSTGRES_USER=airflow"
+            printf 'POSTGRES_PASSWORD=%s\n'               "$PG_PASSWORD"
+            echo "POSTGRES_DB=airflow"
+            echo "TARGET_DB=target"
+            echo "MINIO_ROOT_USER=minioadmin"
+            printf 'MINIO_ROOT_PASSWORD=%s\n'             "$MINIO_PASSWORD"
+            printf 'AIRFLOW_SMTP_USER=%s\n'               "$SMTP_USER"
+            printf 'AIRFLOW_SMTP_PASSWORD=%s\n'           "$SMTP_PASSWORD"
+            printf 'AIRFLOW_ALERT_EMAIL=%s\n'             "$ALERT_EMAIL"
+          } > .env
+
+      - name: Build Airflow image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          build-args: AIRFLOW_BASE_IMAGE=${{ env.AIRFLOW_BASE_IMAGE }}
+          tags: ${{ env.AIRFLOW_IMAGE_NAME }}
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Validate docker-compose config
+        run: docker compose config --quiet
+
+      - name: Build all compose services
+        run: docker compose build
+
+      - name: Lint – Dockerfile (hadolint)
+        run: |
+          docker run --rm -i hadolint/hadolint \
+            hadolint --failure-threshold warning - < Dockerfile
+
+      - name: Lint – Python DAGs (ruff)
+        run: |
+          pip install --quiet ruff
+          ruff check dags/ --select E,F,W --ignore E501
+
+      - name: Lint – YAML files
+        run: |
+          pip install --quiet yamllint
+          yamllint -d "{extends: default, rules: {line-length: {max: 200}}}" \
+            docker-compose.yaml
+
+# ──────────────────────────────────────────────────────────────────────────────
+# JOB 2 – Continuous Deployment: start test env + validate deployment
+# ──────────────────────────────────────────────────────────────────────────────
+  deploy:
+    name: CD – Deploy to Test Environment
+    needs: ci
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Create .env from secrets
+        env:
+          FERNET_KEY:     ${{ secrets.AIRFLOW_FERNET_KEY }}
+          JWT_SECRET:     ${{ secrets.AIRFLOW_JWT_SECRET }}
+          ADMIN_PASSWORD: ${{ secrets.AIRFLOW_ADMIN_PASSWORD }}
+          PG_PASSWORD:    ${{ secrets.POSTGRES_PASSWORD }}
+          MINIO_PASSWORD: ${{ secrets.MINIO_PASSWORD }}
+          SMTP_USER:      ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD:  ${{ secrets.SMTP_PASSWORD }}
+          ALERT_EMAIL:    ${{ secrets.ALERT_EMAIL }}
+        run: |
+          {
+            echo "AIRFLOW_UID=1000"
+            echo "AIRFLOW_BASE_IMAGE=apache/airflow:3.2.1"
+            echo "AIRFLOW_IMAGE_NAME=amalitech-airflow:3.2.1"
+            echo "AIRFLOW_PROJ_DIR=."
+            printf 'AIRFLOW__CORE__FERNET_KEY=%s\n'       "$FERNET_KEY"
+            printf 'AIRFLOW__API_AUTH__JWT_SECRET=%s\n'   "$JWT_SECRET"
+            echo "AIRFLOW__API_AUTH__JWT_ISSUER=airflow"
+            echo "_AIRFLOW_WWW_USER_USERNAME=airflow"
+            printf '_AIRFLOW_WWW_USER_PASSWORD=%s\n'      "$ADMIN_PASSWORD"
+            echo "POSTGRES_USER=airflow"
+            printf 'POSTGRES_PASSWORD=%s\n'               "$PG_PASSWORD"
+            echo "POSTGRES_DB=airflow"
+            echo "TARGET_DB=target"
+            echo "MINIO_ROOT_USER=minioadmin"
+            printf 'MINIO_ROOT_PASSWORD=%s\n'             "$MINIO_PASSWORD"
+            printf 'AIRFLOW_SMTP_USER=%s\n'               "$SMTP_USER"
+            printf 'AIRFLOW_SMTP_PASSWORD=%s\n'           "$SMTP_PASSWORD"
+            printf 'AIRFLOW_ALERT_EMAIL=%s\n'             "$ALERT_EMAIL"
+          } > .env
+
+      - name: Build Airflow image (from cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          build-args: AIRFLOW_BASE_IMAGE=${{ env.AIRFLOW_BASE_IMAGE }}
+          tags: ${{ env.AIRFLOW_IMAGE_NAME }}
+          load: true
+          cache-from: type=gha
+
+      - name: Deploy – start all services
+        run: docker compose up -d --wait --wait-timeout 600
+
+      - name: Verify deployed service health
+        run: |
+          echo "=== Container status ==="
+          docker compose ps
+          echo ""
+          echo "=== Health check states ==="
+          for svc in postgres redis minio \
+                     airflow-apiserver airflow-scheduler \
+                     airflow-dag-processor airflow-worker \
+                     airflow-triggerer metabase; do
+            CID=$(docker compose ps -q "$svc" 2>/dev/null)
+            if [ -z "$CID" ]; then
+              echo "  $svc → NOT FOUND"
+              continue
+            fi
+            HEALTH=$(docker inspect \
+              --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}running (no healthcheck){{end}}' \
+              "$CID" 2>/dev/null || echo "unknown")
+            echo "  $svc → $HEALTH"
+          done
+
+      - name: Print logs on failure
+        if: failure()
+        run: docker compose logs --tail 100
+
+# ──────────────────────────────────────────────────────────────────────────────
+# JOB 3 – Data Flow Validation: MinIO → Airflow → PostgreSQL → Metabase
+# ──────────────────────────────────────────────────────────────────────────────
+  integration-test:
+    name: Data Flow Validation
+    needs: deploy
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Create .env from secrets
+        env:
+          FERNET_KEY:     ${{ secrets.AIRFLOW_FERNET_KEY }}
+          JWT_SECRET:     ${{ secrets.AIRFLOW_JWT_SECRET }}
+          ADMIN_PASSWORD: ${{ secrets.AIRFLOW_ADMIN_PASSWORD }}
+          PG_PASSWORD:    ${{ secrets.POSTGRES_PASSWORD }}
+          MINIO_PASSWORD: ${{ secrets.MINIO_PASSWORD }}
+          SMTP_USER:      ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD:  ${{ secrets.SMTP_PASSWORD }}
+          ALERT_EMAIL:    ${{ secrets.ALERT_EMAIL }}
+        run: |
+          {
+            echo "AIRFLOW_UID=1000"
+            echo "AIRFLOW_BASE_IMAGE=apache/airflow:3.2.1"
+            echo "AIRFLOW_IMAGE_NAME=amalitech-airflow:3.2.1"
+            echo "AIRFLOW_PROJ_DIR=."
+            printf 'AIRFLOW__CORE__FERNET_KEY=%s\n'       "$FERNET_KEY"
+            printf 'AIRFLOW__API_AUTH__JWT_SECRET=%s\n'   "$JWT_SECRET"
+            echo "AIRFLOW__API_AUTH__JWT_ISSUER=airflow"
+            echo "_AIRFLOW_WWW_USER_USERNAME=airflow"
+            printf '_AIRFLOW_WWW_USER_PASSWORD=%s\n'      "$ADMIN_PASSWORD"
+            echo "POSTGRES_USER=airflow"
+            printf 'POSTGRES_PASSWORD=%s\n'               "$PG_PASSWORD"
+            echo "POSTGRES_DB=airflow"
+            echo "TARGET_DB=target"
+            echo "MINIO_ROOT_USER=minioadmin"
+            printf 'MINIO_ROOT_PASSWORD=%s\n'             "$MINIO_PASSWORD"
+            printf 'AIRFLOW_SMTP_USER=%s\n'               "$SMTP_USER"
+            printf 'AIRFLOW_SMTP_PASSWORD=%s\n'           "$SMTP_PASSWORD"
+            printf 'AIRFLOW_ALERT_EMAIL=%s\n'             "$ALERT_EMAIL"
+          } > .env
+
+      - name: Build Airflow image (from cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          build-args: AIRFLOW_BASE_IMAGE=${{ env.AIRFLOW_BASE_IMAGE }}
+          tags: ${{ env.AIRFLOW_IMAGE_NAME }}
+          load: true
+          cache-from: type=gha
+
+      - name: Start all services
+        run: docker compose up -d --wait --wait-timeout 600
+
+      # ── Step A: MinIO ingestion check ────────────────────────────────────────
+      - name: "A | MinIO – wait for raw-sales bucket"
+        env:
+          MINIO_PASSWORD: ${{ secrets.MINIO_PASSWORD }}
+        run: |
+          echo "Checking MinIO is accepting requests..."
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:9000/minio/health/live > /dev/null; then
+              echo "MinIO live after ${i}x5s"
+              break
+            fi
+            [ $i -eq 20 ] && echo "Timeout: MinIO not live" && exit 1
+            sleep 5
+          done
+          echo "Checking raw-sales bucket exists..."
+          STATUS=$(AWS_ACCESS_KEY_ID=minioadmin \
+            AWS_SECRET_ACCESS_KEY="$MINIO_PASSWORD" \
+            AWS_DEFAULT_REGION=us-east-1 \
+            aws --endpoint-url http://localhost:9000 \
+              s3api head-bucket --bucket raw-sales 2>&1 || echo "missing")
+          [ "$STATUS" = "missing" ] && echo "FAIL: raw-sales bucket not found" && exit 1
+          echo "PASS: raw-sales bucket exists."
+
+      # ── Step B: Airflow processing ───────────────────────────────────────────
+      - name: "B | Airflow – wait for API"
+        run: |
+          echo "Waiting for Airflow API server..."
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:8080/api/v2/monitor/health > /dev/null; then
+              echo "Airflow API ready after ${i}x5s"
+              break
+            fi
+            [ $i -eq 60 ] && echo "Timeout: Airflow API not ready" && exit 1
+            sleep 5
+          done
+
+      - name: "B | Airflow – trigger sales_pipeline DAG"
+        env:
+          AIRFLOW_PASSWORD: ${{ secrets.AIRFLOW_ADMIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          # Authenticate with FAB auth manager
+          TOKEN_JSON=$(curl -sf -X POST http://localhost:8080/auth/fab/token \
+            -H "Content-Type: application/json" \
+            -d "{\"username\":\"airflow\",\"password\":\"$AIRFLOW_PASSWORD\"}")
+          TOKEN=$(echo "$TOKEN_JSON" | jq -r '.access_token // empty')
+          if [ -z "$TOKEN" ]; then
+            echo "Token response: $TOKEN_JSON"
+            echo "FAIL: could not obtain auth token"
+            exit 1
+          fi
+          echo "Auth token obtained."
+
+          # Unpause DAG (paused at creation by default)
+          curl -sf -X PATCH http://localhost:8080/api/v2/dags/sales_pipeline \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"is_paused": false}'
+          echo "DAG unpaused."
+
+          # Allow scheduler to register the unpaused state
+          sleep 15
+
+          # Trigger a named run
+          RUN_ID="ci_integration_$(date +%s)"
+          TRIGGER=$(curl -sf -X POST \
+            http://localhost:8080/api/v2/dags/sales_pipeline/dagRuns \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"dag_run_id\": \"$RUN_ID\"}")
+          echo "Trigger response: $TRIGGER"
+          ACTUAL_ID=$(echo "$TRIGGER" | jq -r '.dag_run_id // empty')
+          [ -z "$ACTUAL_ID" ] && echo "FAIL: trigger returned no run ID" && exit 1
+          echo "DAG run triggered: $ACTUAL_ID"
+
+          # Poll until terminal state (max 10 min)
+          echo "Polling DAG run state..."
+          STATE="queued"
+          for i in $(seq 1 60); do
+            STATE=$(curl -sf \
+              "http://localhost:8080/api/v2/dags/sales_pipeline/dagRuns/$ACTUAL_ID" \
+              -H "Authorization: Bearer $TOKEN" | jq -r '.state // "unknown"')
+            echo "  [${i}/60] state=$STATE"
+            [ "$STATE" = "success" ] && echo "DAG run succeeded." && break
+            if [ "$STATE" = "failed" ]; then
+              echo "=== airflow-worker logs ==="
+              docker compose logs airflow-worker --tail 150
+              echo "FAIL: DAG run failed"
+              exit 1
+            fi
+            sleep 10
+          done
+          [ "$STATE" != "success" ] && \
+            echo "FAIL: DAG timed out in state '$STATE'" && exit 1
+
+      # ── Step C: PostgreSQL storage check ────────────────────────────────────
+      - name: "C | PostgreSQL – verify fact_sales rows"
+        run: |
+          echo "=== PostgreSQL: fact_sales ==="
+          COUNT=$(docker exec postgres \
+            psql -U airflow -d target -t \
+            -c "SELECT COUNT(*) FROM fact_sales;" | tr -d '[:space:]')
+          echo "Row count: ${COUNT:-0}"
+          [ "${COUNT:-0}" -lt 1 ] && \
+            echo "FAIL: fact_sales has no rows" && exit 1
+          echo "PASS: fact_sales has $COUNT row(s)."
+          echo ""
+          echo "Sample rows:"
+          docker exec postgres psql -U airflow -d target \
+            -c "SELECT order_id, order_ts::date, total, source_file FROM fact_sales LIMIT 5;"
+          echo ""
+          echo "Dimension table counts:"
+          docker exec postgres psql -U airflow -d target \
+            -c "SELECT 'dim_customer'  AS tbl, COUNT(*) FROM dim_customer
+                UNION ALL SELECT 'dim_product',  COUNT(*) FROM dim_product
+                UNION ALL SELECT 'dim_geography', COUNT(*) FROM dim_geography
+                UNION ALL SELECT 'dim_channel',   COUNT(*) FROM dim_channel
+                UNION ALL SELECT 'dim_payment',   COUNT(*) FROM dim_payment;"
+
+      # ── Step D: MinIO archive check ──────────────────────────────────────────
+      - name: "C | MinIO – verify processed-sales files"
+        env:
+          MINIO_PASSWORD: ${{ secrets.MINIO_PASSWORD }}
+        run: |
+          echo "=== MinIO: processed-sales bucket ==="
+          COUNT=$(AWS_ACCESS_KEY_ID=minioadmin \
+            AWS_SECRET_ACCESS_KEY="$MINIO_PASSWORD" \
+            AWS_DEFAULT_REGION=us-east-1 \
+            aws --endpoint-url http://localhost:9000 \
+              s3 ls s3://processed-sales/ 2>/dev/null | wc -l)
+          echo "Objects in processed-sales: $COUNT"
+          [ "$COUNT" -lt 1 ] && \
+            echo "FAIL: no files archived to processed-sales" && exit 1
+          echo "PASS: $COUNT file(s) archived to MinIO processed-sales."
+
+      # ── Step E: Metabase API check ───────────────────────────────────────────
+      - name: "D | Metabase – API health check"
+        run: |
+          echo "=== Metabase: /api/health ==="
+          for i in $(seq 1 36); do
+            HEALTH=$(curl -sf http://localhost:3000/api/health 2>/dev/null \
+              | jq -r '.status // "unreachable"' 2>/dev/null || echo "unreachable")
+            echo "  [${i}/36] status=$HEALTH"
+            if [ "$HEALTH" = "ok" ]; then
+              echo "PASS: Metabase API is healthy."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "FAIL: Metabase not healthy after 3 minutes"
+          docker compose logs metabase --tail 60
+          exit 1
+
+      - name: Print all service logs on failure
+        if: failure()
+        run: |
+          for svc in airflow-apiserver airflow-scheduler airflow-dag-processor \
+                     airflow-worker airflow-triggerer postgres minio metabase; do
+            echo "=== $svc ==="
+            docker compose logs "$svc" --tail 80
+            echo ""
+          done
